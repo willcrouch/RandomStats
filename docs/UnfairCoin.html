@@ -378,7 +378,7 @@ UnfairOdds = 1
 # Probability of a fair or unfair coin
 ProbabilityFair = NumberOfFairCoins / (NumberOfFairCoins + NumberOfUnfairCoins) # 999/1000
 ProbabilityUnfair = NumberOfUnfairCoins / (NumberOfFairCoins + NumberOfUnfairCoins) # 1/1000</code></pre>
-<p>Now, to figured out the 11th flip, lets ask what are the odds we have for the flip. That would be the probability its heads on a fair coin with the likelihood we have a fair coin plus the probability it heads with the likelihood we have an unfair coin. To find out the likelihood of which coin we have, we’ll use Bayes Theorem, or P(A|B) = P(B|A) * P(A) / P(B). In simplier terms, we will ask what is the likelihood we have the fair coin given 10 flips are heads P(Fair | 10 Heads) and the likelihood hood we have an unfair coin given 10 flips are heads.</p>
+<p>Now, to figured out the 11th flip, lets ask what are the odds we have for the flip. That would be the probability its heads on a fair coin with the likelihood we have a fair coin plus the probability it heads with the likelihood we have an unfair coin. To find out the likelihood of which coin we have, we’ll use Bayes Theorem, or P(A|B) = P(B|A) * P(A) / P(B). In simplier terms, we will ask what is the likelihood we have the fair coin given 10 flips are heads P(Fair | 10 Heads) and the likelihood hood we have an unfair coin given 10 flips are heads P(Unfair | 10 Heads).</p>
 <p>To start, lets ask what is the probability of a fair or unfair coin given 10 flips, all heads:</p>
 <pre class="r"><code>#P(Fair|10H) = P(10H | Fair) * P(Fair) / P(10H)
 
