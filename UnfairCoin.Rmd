@@ -1,0 +1,116 @@
+---
+title: "Unfair Coins"
+date: "2/20/2020"
+output: html_document
+---
+
+Initial question:
+A jar holds 1000 coins. Out of all of the coins, 999 are fair and one is double-sided withtwo heads. Picking a coin at random, you toss the coin ten times.
+Given that you see 10 heads, what is the probability that the coin is double headed and the probability that the next toss of the coin is also a head?
+
+
+Lets take a look at this question and then play around with some of the given assumptions.
+First, lets breakdown the original:
+```{r}
+NumberOfFlips = 10
+NumberOfFairCoins = 999
+NumberOfUnfairCoins = 1
+FairOdds = .5
+UnfairOdds = 1
+
+# Probability of a fair or unfair coin
+ProbabilityFair = NumberOfFairCoins / (NumberOfFairCoins + NumberOfUnfairCoins) # 999/1000
+ProbabilityUnfair = NumberOfUnfairCoins / (NumberOfFairCoins + NumberOfUnfairCoins) # 1/1000
+```
+
+Now, to figured out the 11th flip, we'll use Bayes Theorem, or P(A|B) = P(B|A) * P(A) / P(B). Written out for this question, you would ask: what is the probability of Heads, given a fair coin.  That is equal to the probability of Heads given the unfair coin over multiplied against the probability of a fair coin over the probability of an unfair coin.
+
+To start you need to ask what is the probability of a fair or unfair coin given 10 flips all heads:
+
+```{r fair}
+#P(Fair|10H) = P(10H | Fair) * P(Fair) / P(10H)
+
+Probability10HGivenFair = FairOdds^NumberOfFlips
+Probability10H = FairOdds^NumberOfFlips * ProbabilityFair + UnfairOdds^NumberOfFlips * ProbabilityUnfair
+
+#ProbFairCoinGiven10Flips = 
+ProbFairCoinGiven10Flips = Probability10HGivenFair * ProbabilityFair / Probability10H
+ProbFairCoinGiven10Flips
+```
+
+```{r unfair}
+Probability10HGivenUnfair = UnfairOdds^NumberOfFlips
+Probability10H = FairOdds^NumberOfFlips * ProbabilityFair + UnfairOdds^NumberOfFlips * ProbabilityUnfair
+
+ProbUnFairCoinGiven10Flips = Probability10HGivenUnfair * ProbabilityUnfair / Probability10H
+
+ProbUnFairCoinGiven10Flips
+
+```
+
+Quick check that the the two probabilities add up to 1.
+
+```{r check}
+1 == ProbUnFairCoinGiven10Flips+ProbFairCoinGiven10Flips
+```
+
+So odds we have a fair coin is 49.38211% and the odds we have the unfair coin is 50.61789%.
+
+So the odds the next flip will be heads would be the odds it heads given a fair coin (.5 * .4938) + odds if its unfair (1 * .5062) or:
+``` {r nextToss}
+FairOdds * ProbFairCoinGiven10Flips + UnfairOdds * ProbUnFairCoinGiven10Flips
+```
+
+
+Now, lets take a look at what would happen if we had more or less flips before estimating what the next flip would be.
+
+We'll take the above work, but we'll make a data table for tracking results, and use a loop to run through flips.  And then plot the probability that the nth next flip with be heads.
+
+```{r changeFlips}
+FlipTable = data.table::data.table(NumberOfFlips = 1:20, ProbHead = 1)
+for (i in 1:20){
+  #Set up variable for table
+  NumberOfFlips = i
+  
+  # Fit above work into a single formula
+  FlipTable$ProbHead[i] = FairOdds *  (FairOdds^NumberOfFlips*ProbabilityFair/
+      (FairOdds^NumberOfFlips * ProbabilityFair + UnfairOdds^NumberOfFlips * ProbabilityUnfair)) +
+    UnfairOdds * (UnfairOdds^NumberOfFlips*ProbabilityUnfair / 
+      (FairOdds^NumberOfFlips * ProbabilityFair + UnfairOdds^NumberOfFlips * ProbabilityUnfair))
+}
+
+plot(x = FlipTable$NumberOfFlips, y=FlipTable$ProbHead, type = "l")
+```
+
+We can see that around the 15th flip, its pretty much gaurunteed that the next flip will be heads and you almost certainly have the unfair coin.
+
+So lets also see what happens if we change the number of unfair coins, what thes the probability of the 11th flip being heads if we add more unfair coins.
+
+``` {r changeCoins}
+CoinTable = data.table::data.table(NumberOfCoins = 1:50, ProbHead = 1)
+for (i in 1:50){
+  #Set up variable for table and reset number of flips
+  NumberOfFairCoins = 1000-i
+  NumberOfUnfairCoins = i
+  NumberOfFlips = 10
+  ProbabilityFair = NumberOfFairCoins / (NumberOfFairCoins + NumberOfUnfairCoins) # (1000-i)/1000
+  ProbabilityUnfair = NumberOfUnfairCoins / (NumberOfFairCoins + NumberOfUnfairCoins) # i/1000
+  
+  #Combine above work into a single formula
+  CoinTable$ProbHead[i] = FairOdds *  (FairOdds^NumberOfFlips*ProbabilityFair/
+      (FairOdds^NumberOfFlips * ProbabilityFair + UnfairOdds^NumberOfFlips * ProbabilityUnfair)) +
+    UnfairOdds * (UnfairOdds^NumberOfFlips*ProbabilityUnfair / 
+      (FairOdds^NumberOfFlips * ProbabilityFair + UnfairOdds^NumberOfFlips * ProbabilityUnfair))
+}
+
+plot(x = CoinTable$NumberOfCoins, y=CoinTable$ProbHead, type = "l")
+
+
+```
+
+By adding more coins, we have an explosive increase that is over 95% by the 9th unfair coin.
+
+
+
+
+
