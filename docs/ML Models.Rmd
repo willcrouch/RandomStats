@@ -1,0 +1,538 @@
+---
+title: "ARIMA, Random Forest, and eXtreme Gradient Boost Models"
+author: "Will Crouch"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Additional work
+[Timeseries in R from RStudio Conference 2020](https://github.com/willcrouch/TimeSeries2020Clone)
+
+Now, we are going to look at 
+
+We'll use the following packages:
+
+```{r PackagesLoad, include = FALSE}
+library(quantmod)
+library(lubridate)
+library(tidyverse)
+library(plotly)
+library(randomForest)
+library(xgboost)
+library(tsibble)
+library(fable)
+library(keras)
+library(tensorflow)
+```
+
+```{r Packages, results="hide"}
+library(quantmod)
+library(lubridate)
+library(tidyverse)
+library(plotly)
+library(randomForest)
+library(xgboost)
+library(tsibble)
+library(fable)
+library(keras)
+library(tensorflow)
+```
+
+We'll pull the same GDP data as before, and this time we will focus on forecasting the last 5 periods for our testing on the models.  We are not worrying about seasonality, smoothing, or other data treatment as this time.  We'll start with the tsibble and fable packages for ARIMA.  [Fable](http://fable.tidyverts.org/) is the current forecast package in the tidyverse, having replaced forecast.  Fable also likes to use [tsibbles](https://github.com/tidyverts/tsibble), or time series tibbles.  We will then run simple models with Random Forest and eXterme Gradient Boost.
+ 
+```{r FRED Data, results="hide"}
+quantmod::getSymbols(Symbols = "GDP",src="FRED")
+
+# Create time series in data format and not xts object
+# This can also be used for forecasting by creating extra forecast periods 
+Periods = length(GDP)
+DateStart = date(GDP[1])
+DateEnd = date(GDP[nrow(GDP)])
+DateSeries = seq(DateStart, by = "quarter", length.out = Periods)
+
+GDPn = as.numeric(GDP$GDP)
+
+GDPData = tsibble(
+  YearQuarter = DateSeries,
+  index = YearQuarter,
+  interval = "yearquarter"
+)
+
+str(GDPData)
+
+
+GDPData$GDP = GDPn  #currently unsure of impact of warning
+
+```
+## Autoregressive Integrated Moving Averages
+
+We have looked at the basic linear regression models, and now we'll move to a move complicated machine learning model. We'll combine autoregressive & first difference with a moving average into an ARIMA model.  This folds in the moving averages of the lagged errors [NOT the moving average of the x values].  The standard form for an ARIMA model is: $y_t = φ_1y_{t−1} + · · · + φ_ny_{t−n} + θ_1ε_{t−1} + · · · + θ_nε_{t−n} + c + ε_t$.  Because of the complicated nature of an ARIMA model due to the lagged errors, we will use fable::ARIMA function, since that has the feature to fit the model with the lagged errors.
+
+```{r ARIMA}
+
+# Holding for ARIMA
+
+```
+
+## Vector Autoregression
+
+``` {r VAR}
+
+# Holding for VAR
+
+```
+
+## Random Forest
+
+Now we can compare all the linear regression based models to more advanced machine learning models, Random Forest & eXtreme Gradient Boost.  We'll run both of them as simple linear regression, AR(1), and ARI models; then we will compare all 6 results to the previous models.
+```{r randomForest}
+# Setup
+GDPDataRF = GDPData
+GDPDataRF$GDPLag = dplyr::lag(GDPDataRF$GDP, n = 1)
+GDPDataRF$GDPFD = GDPDataRF$GDP - dplyr::lag(GDPDataRF$GDP, n = 1)
+GDPDataRF$FDLag = dplyr::lag(GDPDataRF$GDPFD, n = 1)
+
+# Linear Model
+RF_model = randomForest(GDPDataRF$GDP ~ seq(1:nrow(GDPDataRF)), data = GDPDataRF,
+                          mintry = 2, ntrees = 500, nodesize = 25)
+
+# AR(1) Model
+RFAR_model = randomForest(GDPDataRF$GDP[2:nrow(GDPDataRF)] ~ GDPDataRF$GDPLag[2:nrow(GDPDataRF)],
+                          data = GDPDataRF, mintry = 2, ntrees = 500, nodesize = 25)
+
+# FD Model
+RFFD_model = randomForest(GDPDataRF$GDPFD[3:nrow(GDPDataRF)] ~ GDPDataRF$FDLag[3:nrow(GDPDataRF)],
+                          data = GDPDataRF, mintry = 2, ntrees = 500, nodesize = 25)
+
+# Linear Predict
+GDPDataRF$LRPred = predict(RF_model, newdata = GDPDataRF)
+
+# AR(1) Predict
+GDPDataRF$ARPred = c(NA, predict(RFAR_model, newdata = GDPDataRF[2:nrow(GDPDataRF),]))
+
+# FD Predict
+GDPDataRF$FDEst = c(rep(NA,2), predict(RFFD_model, newdata = GDPDataRF[3:nrow(GDPDataRF),]))
+GDPDataRF$FDPred = dplyr::lag(GDPDataRF$GDP, n = 1) + GDPDataRF$FDEst
+
+# Plot
+plot(x = GDPDataRF$YearQuarter, y = GDPDataRF$GDP)
+lines(x = GDPDataRF$YearQuarter, y = GDPDataRF$LRPred, col = "blue")
+lines(x = GDPDataRF$YearQuarter, y = GDPDataRF$ARPred, col = "red")
+lines(x = GDPDataRF$YearQuarter, y = GDPDataRF$FDPred, col = "green")
+
+# RMSE
+# Linear
+sqrt(sum((GDPDataRF$GDP - GDPDataRF$LRPred)^2))
+# AR(1)
+sqrt(sum((GDPDataRF$GDP[2:nrow(GDPDataRF)] - GDPDataRF$ARPred[2:nrow(GDPDataRF)])^2))
+# FD
+sqrt(sum((GDPDataRF$GDP[3:nrow(GDPDataRF)] - GDPDataRF$FDPred[3:nrow(GDPDataRF)])^2))
+
+```
+
+Lets zoom in on the plot as well with the RF and see a fault in RF models. Random Forest have a **VERY** difficult time of estimating information they have never seen before.  So when estimating new numbers like total values, it fails badly, but when estimating the change in an event, it does MUCH better.  That is why the First Difference model continues to work, but the Linear and Autoregressive models fail.
+
+```{r RF Zoom}
+# Plot -- Zoom
+plot(x = GDPDataRF$YearQuarter[250:nrow(GDPDataRF)], y = GDPDataRF$GDP[250:nrow(GDPDataRF)])
+lines(x = GDPDataRF$YearQuarter[250:nrow(GDPDataRF)], y = GDPDataRF$LRPred[250:nrow(GDPDataRF)], col = "blue")
+lines(x = GDPDataRF$YearQuarter[250:nrow(GDPDataRF)], y = GDPDataRF$ARPred[250:nrow(GDPDataRF)], col = "red")
+lines(x = GDPDataRF$YearQuarter[250:nrow(GDPDataRF)], y = GDPDataRF$FDPred[250:nrow(GDPDataRF)], col = "green")
+
+```
+
+## eXtreme Gradient Boost Model
+
+XGBoost functions **very** similarly to Random Forest (they have very similar underlying math), though XGBoost models are typically more effective.  In this case they have roughly the same results with errors around the linear and AR models, and the FD functioning the best.  We can even zoom in and see the same failures. 
+
+```{r xgBoost}
+# Setup
+GDPDataXGB = GDPData
+GDPDataXGB$GDPLag = dplyr::lag(GDPDataXGB$GDP, n = 1)
+GDPDataXGB$GDPFD = GDPDataXGB$GDP - dplyr::lag(GDPDataXGB$GDP, n = 1)
+GDPDataXGB$FDLag = dplyr::lag(GDPDataXGB$GDPFD, n = 1)
+
+# Linear Model
+XGB_model = xgboost(data = data.matrix(seq(1:nrow(GDPDataXGB))),
+               label = data.matrix(GDPDataXGB$GDP),
+               eta = 0.01,
+               nthread = 7,
+               min_child_weight = 7,
+               max_depth = 6,
+               objective = "reg:squarederror",
+               lambda = 1.1,
+               alpha = 0.5, 
+               gamma = 5,
+               eval_metric = "rmse",
+               nrounds = 2000,
+               colsample_bytree = 0.7,
+               verbose = FALSE,
+               subsample = 0.3,
+               print_every_n = 10)
+
+# AR(1) Model
+XGBAR_model = xgboost(data = data.matrix(GDPDataXGB$GDPLag[2:nrow(GDPDataXGB)]),
+               label = data.matrix(GDPDataXGB$GDP[2:nrow(GDPDataXGB)]),
+               eta = 0.01,
+               nthread = 7,
+               min_child_weight = 7,
+               max_depth = 5,
+               objective = "reg:squarederror",
+               lambda = 1.1,
+               alpha = 0.5, 
+               gamma = 5,
+               eval_metric = "rmse",
+               nrounds = 2000,
+               colsample_bytree = 0.7,
+               verbose = FALSE,
+               subsample = 0.3,
+               print_every_n = 10)
+
+# FD Model
+XGBFD_model = xgboost(data = data.matrix(GDPDataXGB$FDLag[3:nrow(GDPDataXGB)]),
+               label = data.matrix(GDPDataXGB$GDPFD[3:nrow(GDPDataXGB)]),
+               eta = 0.01,
+               nthread = 7,
+               min_child_weight = 7,
+               max_depth = 6,
+               objective = "reg:squarederror",
+               lambda = 1.1,
+               alpha = 0.5, 
+               gamma = 5,
+               eval_metric = "rmse",
+               nrounds = 2000,
+               colsample_bytree = 0.7,
+               verbose = FALSE,
+               subsample = 0.3,
+               print_every_n = 10)
+
+# Linear Predict
+GDPDataXGB$LRPred = predict(XGB_model, newdata = data.matrix(seq(1:nrow(GDPDataXGB))))
+
+# AR(1) Predict
+GDPDataXGB$ARPred = c(NA, predict(XGBAR_model, newdata = data.matrix(GDPDataRF$GDPLag[2:nrow(GDPDataRF)])))
+
+# FD Predict
+GDPDataXGB$FDEst = c(rep(NA,2), predict(XGBFD_model, newdata = data.matrix(GDPDataRF$FDLag[3:nrow(GDPDataRF)])))
+GDPDataXGB$FDPred = dplyr::lag(GDPDataRF$GDP, n = 1) + GDPDataRF$FDEst
+
+# Plot
+plot(x = GDPDataXGB$YearQuarter, y = GDPDataXGB$GDP)
+lines(x = GDPDataXGB$YearQuarter, y = GDPDataXGB$LRPred, col = "blue")
+lines(x = GDPDataXGB$YearQuarter, y = GDPDataXGB$ARPred, col = "red")
+lines(x = GDPDataXGB$YearQuarter, y = GDPDataXGB$FDPred, col = "green")
+
+# RMSE
+# Linear
+sqrt(sum((GDPDataXGB$GDP - GDPDataXGB$LRPred)^2))
+# AR(1)
+sqrt(sum((GDPDataXGB$GDP[2:nrow(GDPDataXGB)] - GDPDataXGB$ARPred[2:nrow(GDPDataXGB)])^2))
+# FD
+sqrt(sum((GDPDataXGB$GDP[3:nrow(GDPDataXGB)] - GDPDataXGB$FDPred[3:nrow(GDPDataXGB)])^2))
+
+```
+
+```{r XGB Zoom}
+# Plot -- Zoom
+plot(x = GDPDataXGB$YearQuarter[250:nrow(GDPDataXGB)], y = GDPDataXGB$GDP[250:nrow(GDPDataXGB)])
+lines(x = GDPDataXGB$YearQuarter[250:nrow(GDPDataXGB)], y = GDPDataXGB$LRPred[250:nrow(GDPDataXGB)], col = "blue")
+lines(x = GDPDataXGB$YearQuarter[250:nrow(GDPDataXGB)], y = GDPDataXGB$ARPred[250:nrow(GDPDataXGB)], col = "red")
+lines(x = GDPDataXGB$YearQuarter[250:nrow(GDPDataXGB)], y = GDPDataXGB$FDPred[250:nrow(GDPDataXGB)], col = "green")
+
+```
+
+## CNN Model
+
+We will run a super basic Convolutional neural network to see how that preforms on the same three sets.  Basic version based on the simple example from the [RStudio Conf Keras Class](https://rstudio-conf-2020.github.io/dl-keras-tf/notebooks/01-main-ingredients.nb.html) with an added layer for epochs and a stopping point for model improvement.  All models will also just be a single input column (Sequence for linear, prior period for AR, and prior for FD)
+
+This time we will find that the AR model is the most performative, and the FD model is the worst by far.  Though this is a simple model with only 1 variable, and we did not normalize the data, so this may not hold true going forward.  We can also see that while these results have the best RMSE, they are obviously not the best models.  Because the system is actively trying to reduce the MSE in the loss function, it will fit that well.  When doing full work, we would only measure the accuracy on the validation data and not on the test and training.
+
+```{r CNN}
+
+GDPDataCNN = GDPData
+GDPDataCNN$GDP = scale(GDPDataCNN$GDP)
+GDPDataCNN$GDPLag = dplyr::lag(GDPDataCNN$GDP, n = 1)
+GDPDataCNN$GDPFD = GDPDataCNN$GDP - dplyr::lag(GDPDataCNN$GDP, n = 1)
+GDPDataCNN$FDLag = dplyr::lag(GDPDataCNN$GDPFD, n = 1)
+
+CNNX <- as.matrix(seq(1:nrow(GDPDataCNN)))
+CNNY <- GDPDataCNN$GDP
+
+CNNXAR <- as.matrix(GDPDataCNN$GDPLag[2:nrow(GDPDataCNN)])
+CNNYAR <- GDPDataCNN$GDP[2:nrow(GDPDataCNN)]
+
+CNNXFD <- as.matrix(GDPDataCNN$FDLag[3:nrow(GDPDataCNN)])
+CNNYFD <- GDPDataCNN$GDPFD[3:nrow(GDPDataCNN)]
+
+# Setup
+BatchSize = 32
+Epochs = 50
+ValSplit = .1
+ShapeSize = 1
+
+# Linear Regression Esque
+
+model <- keras_model_sequential() %>%
+  layer_dense(units = 16, input_shape = ShapeSize, activation = "relu") %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1)
+
+model %>% compile(
+  loss = "mse",
+  optimizer = optimizer_rmsprop(),
+  metrics = list("mean_absolute_error")
+)
+
+history <- model %>% 
+  fit(CNNX, 
+      CNNY,
+      validation_split = ValSplit,
+      batch_size = BatchSize, 
+      epochs = Epochs,
+      callbacks = list(
+        callback_early_stopping(patience = 10, restore_best_weights = TRUE)),
+      verbose = FALSE)
+
+GDPDataCNN$LRPred = model %>% predict(CNNX)
+
+# Autoregressive Esque
+
+model <- keras_model_sequential() %>%
+  layer_dense(units = 16, input_shape = ShapeSize, activation = "relu") %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1)
+
+model %>% compile(
+  loss = "mse",
+  optimizer = optimizer_rmsprop(),
+  metrics = list("mean_absolute_error")
+)
+
+historyAR <- model %>% 
+  fit(CNNXAR, 
+      CNNYAR,
+      validation_split = ValSplit,
+      batch_size = BatchSize, 
+      epochs = Epochs,
+      callbacks = list(
+        callback_early_stopping(patience = 10, restore_best_weights = TRUE)),
+      verbose = FALSE)
+
+GDPDataCNN$ARPred = c(NA, model %>% predict(CNNXAR))
+
+# Autoregressive Integrated Esque
+# Tanh was used in place of relu because it runs from -1 to 1 and not 0 to 1
+model <- keras_model_sequential() %>%
+  layer_dense(units = 16, input_shape = ShapeSize, activation = "tanh") %>%
+  layer_dense(units = 16, activation = "tanh") %>%
+  layer_dense(units = 16, activation = "tanh") %>%
+  layer_dense(units = 1)
+
+model %>% compile(
+  loss = "mse",
+  optimizer = optimizer_rmsprop(),
+  metrics = list("mean_absolute_error")
+)
+
+historyFD <- model %>% 
+  fit(CNNXFD, 
+      CNNYFD,
+      validation_split = ValSplit,
+      batch_size = BatchSize, 
+      epochs = Epochs,
+      callbacks = list(
+        callback_early_stopping(patience = 10, restore_best_weights = TRUE)),
+      verbose = FALSE)
+
+GDPDataCNN$FDPred = c(rep(NA,2), model %>% predict(CNNXFD))
+
+plot(history)
+plot(historyAR)
+plot(historyFD)
+
+plot(x = GDPDataCNN$YearQuarter, y = GDPDataCNN$GDP)
+lines(x = GDPDataCNN$YearQuarter, y = GDPDataCNN$LRPred, col = "blue")
+lines(x = GDPDataCNN$YearQuarter, y = GDPDataCNN$ARPred, col = "red")
+lines(x = GDPDataCNN$YearQuarter, y = GDPDataCNN$FDPred, col = "green")
+
+# RMSE
+# Linear
+sqrt(sum((GDPDataCNN$GDP - GDPDataCNN$LRPred)^2))
+# AR(1)
+sqrt(sum((GDPDataCNN$GDP[2:nrow(GDPDataCNN)] - GDPDataCNN$ARPred[2:nrow(GDPDataCNN)])^2))
+# FD
+sqrt(sum((GDPDataCNN$GDP[3:nrow(GDPDataCNN)] - GDPDataCNN$FDPred[3:nrow(GDPDataCNN)])^2))
+
+```
+
+## LSTM Model
+Long short-term memory (LSTM) models are recurrent neural networks that use feedback connections and are natively sequential.  LSTM are used by Google for th Google Voice, Allo, Assisstant, and Translation programs.  There is some work with these models and [stocks](https://ieeexplore.ieee.org/document/8010701), and we will see if we can build on them.  Below is a basic AR(1) model, which performs well with a nominal RMSE, though without scaling.
+
+```{r LSTM AR(1)}
+Lag1 = lag(GDPn,1)
+
+LSTMx = array(Lag1[2:length(GDPn)], dim = c((length(GDPn)-1), 1, 1))
+LSTMy = GDPn[2:length(GDPn)]
+
+model = keras_model_sequential() %>%   
+  layer_lstm(units=128, input_shape=c(1, 1), activation="relu") %>%  
+  layer_dense(units=64, activation = "relu") %>%  
+  layer_dense(units=32, activation = "relu") %>%  
+  layer_dense(units=1, activation = "linear")
+
+model %>% compile(loss = 'mse',
+                  optimizer = optimizer_rmsprop(),
+                  metrics = list("mean_absolute_error")
+)
+
+historyLSTM <- model %>% 
+  fit(LSTMx,LSTMy, 
+      validation_split = .1,
+      batch_size = 32, 
+      epochs = 50,
+      callbacks = list(
+        callback_early_stopping(patience = 10, 
+                                restore_best_weights = TRUE)),
+      verbose = FALSE)
+
+plot(historyLSTM)
+
+ARPred = model %>% predict(LSTMx)
+
+plot(x = GDPData$YearQuarter[2:length(GDPn)], y = GDPn[2:length(GDPn)])
+lines(x = GDPData$YearQuarter[2:length(GDPn)], y = ARPred, col = "blue")
+
+sqrt(sum((GDPn[2:length(GDPn)] - ARPred)^2))
+
+```
+
+Now lets look at an AR(3) and an ARIMA(3,1,0).  Overall they work
+
+```{r LSTM ARIMA(3,0,0)}
+
+#Scale GDP to -1:1
+Lags = 3
+
+GDPScale = scale(GDPn)/2.5 
+
+Lag1 = lag(GDPScale,1)
+Lag2 = lag(GDPScale,2)
+Lag3 = lag(GDPScale,3)
+LSTM3x = array(
+  cbind(
+    Lag1[(Lags+1):length(GDPScale)],
+    Lag2[(Lags+1):length(GDPScale)],
+    Lag3[(Lags+1):length(GDPScale)]
+  ), dim = c((length(GDPScale)-Lags), Lags, 1))
+LSTM3y = GDPScale[(Lags+1):length(GDPScale)]
+
+model = keras_model_sequential() %>%   
+  layer_lstm(units=128, input_shape=c(Lags, 1), activation="tanh") %>%  
+  layer_dense(units=64, activation = "tanh") %>%  
+  layer_dense(units=32, activation = "tanh") %>%  
+  layer_dense(units=1, activation = "linear")
+
+model %>% compile(loss = 'mse',
+                  optimizer = optimizer_rmsprop(),
+                  metrics = list("mean_absolute_error")
+)
+
+historyLSTM3 <- model %>% 
+  fit(LSTM3x,LSTM3y, 
+      validation_split = .1,
+      batch_size = 20, 
+      epochs = 200,
+      callbacks = list(
+        callback_early_stopping(patience = 20, 
+                                restore_best_weights = TRUE)),
+      verbose = FALSE)
+
+plot(historyLSTM3)
+
+AR3Pred = model %>% predict(LSTM3x)*2.5
+AR3Pred = AR3Pred*attributes(GDPScale)$'scaled:scale' + attributes(GDPScale)$'scaled:center'
+
+plot(x = GDPData$YearQuarter[(Lags+1):length(GDPn)], y = GDPn[(Lags+1):length(GDPn)])
+lines(x = GDPData$YearQuarter[(Lags+1):length(GDPn)], y = AR3Pred, col = "blue")
+
+sqrt(sum((GDPn[(Lags+1):length(GDPn)] - AR3Pred)^2))
+```
+
+```{r LSTM ARIMA(3,1,0)}
+#ARIMA(3,1,0)
+Lags = 3 + 1 # +1 for FD
+
+# Scale Data -- Box Cox vs Z-Score
+plot(scale(GDPn))
+points(box_cox(GDPn, .1) /(max(box_cox(GDPn, .1))/2.5) , col = "blue")  #y^lambda
+
+# Scale to Box Cox, better linear
+lambda = .1
+GDPScale = box_cox(GDPn, lambda)
+GDPScale = GDPScale / 17
+
+# Get first diff, and 3 lags
+GDPScaleFD = GDPScale - lag(GDPScale, n = 1)
+Lag1FD = lag(GDPScaleFD,1)
+Lag2FD = lag(GDPScaleFD,2)
+Lag3FD = lag(GDPScaleFD,3)
+
+# Create Array, Rows, by 3 lags, by 1
+LSTM3FDx = array(
+  cbind(
+    Lag1FD[(Lags+1):length(GDPScaleFD)],
+    Lag2FD[(Lags+1):length(GDPScaleFD)],
+    Lag3FD[(Lags+1):length(GDPScaleFD)]
+  ), dim = c((length(GDPScaleFD)-Lags), Lags, 1))
+LSTM3FDy = GDPScaleFD[(Lags+1):length(GDPScaleFD)]
+
+# Create Model
+model = keras_model_sequential() %>%   
+  layer_lstm(units=128, input_shape=c(Lags, 1), activation="tanh") %>%  
+  layer_dropout(.3) %>%
+  layer_dense(units=64, activation = "tanh") %>%
+  layer_dropout(.3) %>%
+  layer_dense(units=32, activation = "tanh") %>%  
+  layer_dropout(.3) %>%
+  layer_dense(units=1, activation = "linear")
+
+# Define loss and optimization
+model %>% compile(loss = 'mse',
+                  optimizer = optimizer_rmsprop(),
+                  metrics = list("mean_squared_error")
+)
+
+# Fit model
+historyLSTM3FD <- model %>% 
+  fit(LSTM3FDx,LSTM3FDy, 
+      validation_split = .1,
+      batch_size = 32, 
+      epochs = 30,
+      callbacks = list(
+        callback_early_stopping(patience = 20, 
+                                restore_best_weights = TRUE)),
+      verbose = FALSE)
+
+# Plot training and validation by epoch
+plot(historyLSTM3FD)
+
+# Predict model
+AR3FDPred = model %>% predict(LSTM3FDx)
+
+# Estimtae FD + Last period, and descale
+AR3FDPredict = lag(GDPScale, 1)[(Lags+1):length(GDPScale)] + as.numeric(AR3FDPred)
+AR3FDPredict = inv_box_cox(AR3FDPredict*17, lambda)
+
+# Plot estimation vs actual
+plot(x = GDPData$YearQuarter[(Lags+1):length(GDPn)], y = GDPn[(Lags+1):length(GDPn)])
+lines(x = GDPData$YearQuarter[(Lags+1):length(GDPn)], y = AR3FDPredict[(Lags+1):length(GDPn)], col = "blue")
+
+#RMSE
+sqrt(sum((GDPn[(Lags+1):length(GDPn)] - AR3FDPredict)^2))
+
+
+
+```
+
