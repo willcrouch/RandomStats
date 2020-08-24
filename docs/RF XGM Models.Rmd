@@ -1,0 +1,409 @@
+---
+title: "RF and XGB Models"
+author: "Will Crouch"
+date: "8/14/2020"
+output: html_document
+---
+
+Call packages:
+
+* httr and jsonlite will call the API and process data
+* Tidyverse will help clean and process data
+* Zoo has great packages applying a function sequentially for time series data
+* Fabletools has a great box_cox application function
+* Random Forest and xgboost are the model packages
+
+```{r setup, include = FALSE}
+
+library(httr)
+library(jsonlite)
+library(tidyverse)
+library(zoo)
+library(fabletools)
+library(randomForest)
+library(xgboost)
+library(keras)
+library(tensorflow)
+
+APIToken = "token=86742a67fe50640e3d25480457cc2af301cf7522" # Add at then end of Tiingo calls
+
+```
+
+Define the list of stocks to pull, in this case just focusing on the S&P500 ETF by Vangaurd
+
+```{r list of stocks}
+
+StockList = c(
+              #"BAC" # Bank of America
+              #,"AXP" # American Express
+              #,"COF" # Capital One
+              #,"C"   # Citigroup
+              #,"CMA" # Comerica
+              #,"JPM" # JPMorgan Chase
+              #,"USB" # US Banks
+              #,"WFC" # Wells Fargo
+              "VOO" # Vanguard ETF S&P 500
+              )
+
+StockData = list(rep(data.frame(NA),length(StockList)))
+
+```
+
+With more than 1 stock, the loop will process each independently.  The structure stores each df that is returned as a df nested in a list.  This allows for easier storage and recalls then creating and naming multiple dfs.
+
+```{r Data Calls}
+for (i in 1:length(StockList)) {
+ 
+  StartDate = "1996-01-01"
+  
+  Ticker = StockList[i]
+  
+  HistCall = paste("https://api.tiingo.com/tiingo/daily/", # Historic Data
+                  Ticker,
+                  "/prices?startDate=",
+                  StartDate,
+                  "&format=json&resampleFreq=daily&",
+                  APIToken,
+                  sep = "")
+
+  HistResponse = httr::GET(HistCall)
+
+  StockData[[i]] = as.data.frame(fromJSON(content(HistResponse, type = "text")))
+  
+}
+  
+```
+Defining functions for each premade function allows for easier handling and applying when processing the data as well storing complicated formulas that will be applied with rollapply like the Pythagorean means.
+
+* FD: applying first difference
+* mA: Moving average, applies simple average over n periods
+* mHM: Moving harmonic mean, applies harmonic mean over n periods
+* mGM: Moving geometric mean, applies geometric mean over n periods
+** Note: tryCatch added because of NAs produced with negatives from first difference
+* mVar: Moving variance, applies the variance over n periods
+* mSO: Moving [Stochastic Oscillator](https://www.investopedia.com/terms/s/stochasticoscillator.asp#:~:text=A%20stochastic%20oscillator%20is%20a,moving%20average%20of%20the%20result.): Momentum indicator over two moving averages
+* mHLSpread: Moving High Low spread, spread between stock's intraday high and low over n periods
+* mHLC: Moving High Low Close: spread from the high and low close price over n periods
+
+
+```{r Define Functions}
+# First Difference
+FD <- function(x){c(NA,diff(x, lag = 1, differences = 1, fill = NA))}
+
+# Moving N Day Pythagorean Averages
+mA <- function(x, n){rollapplyr(lag(x,1), width = n, FUN = mean, fill = NA)}
+mHM = function(x, n) { n /rollapplyr(lag(x,1)^-1, width = n, FUN = sum, fill = NA) }
+mGM = function(x, n) { rollapplyr(lag(x,1), width = n, FUN = prod, fill = NA)^(1/n)}
+
+# Moving N Day Variance
+mVar <- function(x, n){rollapplyr(lag(x,1), width = n, FUN = var, fill = NA)}
+
+# Moving Stochastic Oscillator
+mSO <- function(x){(x - rollapplyr(lag(x,1), width = 14, FUN = min, fill = NA)) / 
+                  (rollapplyr(lag(x,1), width = 14, FUN = max, fill = NA) - 
+                     rollapplyr(lag(x,1), width = 14, FUN = min, fill = NA)) * 100}
+
+# Spread High and Low over prior N days
+mHLSpread = function(x1, x2, n){rollapplyr(lag(x1,1), width = n, FUN = max, fill = NA) - 
+    rollapplyr(lag(x2,1), width = n, FUN = min, fill = NA)}
+
+# Spread between Close prior N days
+mHLC = function(x, n){rollapplyr(lag(x,1), width = n, FUN = max, fill = NA) - 
+    rollapplyr(lag(x,1), width = n, FUN = min, fill = NA)}
+
+
+```
+
+
+Clean data, define Y value, apply functions, transform, and scale.  Defined in a loop so that if there are multiple stocks all activities can be performed for each.
+
+```{r clean up and add}
+
+for (i in 1:length(StockList)) {
+  
+  # Call a single stock's data from Stock Data list
+  df = StockData[[i]]
+  
+  # Get Y Variable for that will be predicted
+  if (i == 1) {
+    YVar = df$adjClose
+    DateList = as.Date(df$date)
+  }
+  
+  # Cleaning out data that is eh, or can fuck up with negatives or such
+  df$date = NULL
+  df$divCash = NULL
+  df$splitFactor = NULL
+  
+  # Add statistical metrics
+  df = df %>%
+    mutate("FirstDiff" = FD(adjClose)
+           ,"DayMA5" =  mA(FirstDiff,5)
+           ,"DayMA10" =  mA(FirstDiff,10)
+           ,"DayMA20" =  mA(FirstDiff,20)
+           ,"DayMA30" =  mA(FirstDiff,30)
+           ,"DayMGM30" = mGM(FirstDiff,30)
+           ,"DayMHM30" = mHM(FirstDiff,30)
+           ,"DayMA50" =  mA(FirstDiff,50)
+           ,"DayMGM50" = mGM(FirstDiff,50)
+           ,"DayMHM50" = mHM(FirstDiff,50)
+           ,"DayMA100" =  mA(FirstDiff,100)
+           ,"DayMGM100" = mGM(FirstDiff,100)
+           ,"DayMHM100" = mHM(FirstDiff,100)
+           ,"DayMA200" =  mA(FirstDiff,200)
+           ,"DayMGM200" = mGM(FirstDiff,200)
+           ,"DayMHM200" = mHM(FirstDiff,200)
+           ,"DayMVar5" =  mVar(FirstDiff,5)
+           ,"DayMVar10" =  mVar(FirstDiff,10)
+           ,"DayMVar20" =  mVar(FirstDiff,20)
+           ,"DayMVar30" =  mVar(FirstDiff,30)
+           ,"DayLag1" = lag(FirstDiff, 1)
+           ,"DayLag2" = lag(FirstDiff, 2)
+           ,"DayLag3" = lag(FirstDiff, 3)
+           ,"StoOsc" = mSO(adjClose)
+           ,"ASpread30100" = DayMA30 - DayMA100
+           ,"GSpread30100" = DayMGM30 - DayMGM100
+           ,"HSpread30100" = DayMHM30 - DayMHM100
+           ,"ASpread50200" = DayMA50 - DayMA200
+           ,"GSpread50200" = DayMGM50 - DayMGM200
+           ,"HSpread50200" = DayMHM50 - DayMHM200
+           ,"HighLowSpread1" = mHLSpread(adjHigh, adjLow, 1)
+           ,"HighLowSpread5" = mHLSpread(adjHigh, adjLow, 5)
+           ,"HighLowSpread10" = mHLSpread(adjHigh, adjLow, 10)
+           ,"CloseHLSpread10" = mHLC(adjClose, 10)
+           ,"CloseHLSpread20" = mHLC(adjClose, 20)
+           ,"CloseHLSpread30" = mHLC(adjClose, 30)
+           ,"CloseHLSpread50" = mHLC(adjClose, 50)
+           ,"CloseHLSpread100" = mHLC(adjClose, 100)
+           ,"CloseHLSpread200" = mHLC(adjClose, 200)
+         )
+  
+  # cleaning NaNs created from geometeric means
+  df[is.nan(data.matrix(df))] = 0
+  
+  # Apply box cox, -.1 was picked because I thought it looked good
+  #df = box_cox(df, -.1)
+
+  # cleaning out NAs, since they can appear from 0s in the box cox transformation
+  #df[is.na(df)] = 0
+
+  # Get the max for the Y variable that we will be using in the model, we will need to transform back to actual
+  if (i == 1){
+    CloseMax = max(
+      ceiling(
+        abs(
+          na.omit(
+              df$FirstDiff
+          )
+        )
+      )
+    ) # 4
+  }
+  
+  # Scale between -1 and 1
+  for (j in 2:ncol(df)) {
+    if( max(
+      ceiling(
+        abs(
+          na.omit(
+            df[,j]
+            )
+          )
+        )
+      ) == 0) {
+      next
+    } else {
+      df[,j] = df[,j] / 
+        max(
+          ceiling(
+            abs(
+              na.omit(
+                df[,j]
+                )
+              )
+            )
+        )
+    }
+  }
+  
+  
+  StockData[[i]] = df
+  
+}
+
+```
+
+Drop data in data.matrix formats and create test and train sizes.
+
+```{r create matrix}
+
+df = StockData[[1]]
+ModelY = df$FirstDiff
+
+TrainSize = 2000
+TestSize = 100
+DataSize = length(ModelY)
+TestStart = DataSize - (TestSize - 1)
+TrainEnd = TestStart - 1
+TrainStart = TrainEnd - (TrainSize - 1) 
+
+TrainY = data.matrix(ModelY[ TrainStart:TrainEnd ])
+TestY = data.matrix(ModelY[ TestStart:DataSize ])
+
+TrainX = data.matrix(df[TrainStart:TrainEnd, 12:ncol(df)])
+TestX = data.matrix(df[TestStart:DataSize, 12:ncol(df)])
+
+```
+
+First model will be Random Forest Model.  Set to 10,000 trees, min try pre branch of 20, node size of 30 to prevent overfitting.
+
+```{r RF Model}
+
+set.seed(10001)
+
+RFModel = randomForest(y = as.vector(TrainY)
+                       ,x = TrainX
+                       ,ntree = 10000
+                       ,mintry = 20
+                       ,nodesize = 30
+                       )
+
+# check how model performs against original data
+CheckRF = predict(RFModel, newdata = TrainX)
+CheckRF = CheckRF * CloseMax
+
+plot(x = DateList[TrainStart:TrainEnd], y = c(NA,diff(YVar[TrainStart:TrainEnd])))
+lines(x = DateList[TrainStart:TrainEnd], y = CheckRF, col = "red")
+
+# Predict model
+PredictRF = predict(RFModel, newdata = TestX)
+PredictRF = PredictRF * CloseMax
+
+plot(x = DateList[TestStart:DataSize], y = c(NA,diff(YVar[TestStart:DataSize])))
+lines(x = DateList[TestStart:DataSize], y = PredictRF, col = "blue")
+
+```
+
+Next will be an eXtreme Gradient Boost model.  This model will have 10,000 rounds and run on 7 threads.  The other factors will be modified to reduce overfitting.
+
+```{r XGB Model}
+
+set.seed(10001)
+
+XGBModel = xgboost(data = TrainX
+                   ,label = TrainY
+                   ,nrounds = 10000
+                   ,nthread = 7
+                   ,verbose = FALSE
+                   ,eta = .1
+                   ,gamma = 0
+                   ,subsample = .8
+                   
+                   ,colsample_bylevel = 2/3
+                   ,min_child_weight = 0
+                   ,max_delta_step = 0
+                   ,num_parallel_tree = 10
+                   ,early_stopping_rounds = 50
+                   ,objective = "reg:squarederror"
+                    )
+
+# check how model performs against original data
+CheckXGB = predict(XGBModel, newdata = TrainX)
+CheckXGB = CheckXGB * CloseMax
+
+plot(x = DateList[TrainStart:TrainEnd], y = c(NA,diff(YVar[TrainStart:TrainEnd])))
+lines(x = DateList[TrainStart:TrainEnd], y = CheckXGB, col = "red")
+
+# Predict model
+PredictXGB = predict(XGBModel, newdata = TestX)
+PredictXGB = PredictXGB * CloseMax
+
+plot(x = DateList[TestStart:DataSize], y = c(NA,diff(YVar[TestStart:DataSize])))
+lines(x = DateList[TestStart:DataSize], y = PredictXGB, col = "blue")
+
+```
+
+A simple LSTM model to see for comparison.
+
+```{r LSTM Model}
+
+set.seed(10001)
+
+# Create Arrays
+TrainArray = array(data = TrainX, dim = c(nrow(TrainX),ncol(TrainX),1))
+TestArray = array(data = TestX, dim = c(nrow(TestX),ncol(TestX),1))
+
+model = keras_model_sequential() %>%   
+  layer_lstm(units=512
+             ,input_shape=c(dim(TrainArray)[2], dim(TrainArray)[3])
+             ,activation="tanh"
+             ,return_sequences = TRUE) %>%  
+  layer_dropout(.2) %>%
+  layer_lstm(units=512
+             ,activation = "tanh") %>%
+  layer_dropout(.2) %>%
+  layer_dense(units=512
+              ,activation = "tanh") %>%
+  layer_dropout(.2) %>%
+  layer_dense(units=512
+              ,activation = "tanh") %>%
+  layer_dropout(.2) %>%
+  layer_dense(units=1, activation = "linear")
+
+# Define loss and optimization
+model %>% compile(loss = 'mse'
+                  ,optimizer = optimizer_rmsprop()
+                  ,metrics = list("mean_squared_error")
+)
+
+# Fit model
+history <- model %>% 
+  fit(TrainArray,
+      TrainY, 
+      validation_split = .2,
+      # validation_data = list(Test, TestY),
+      batch_size = 32, 
+      epochs = 100,
+      callbacks = list(
+        callback_early_stopping(patience = 20, 
+                                restore_best_weights = FALSE),
+        callback_reduce_lr_on_plateau(factor = 0.2, 
+                                      patience = 5)
+        )
+      #,verbose = FALSE
+      )
+
+# Plot training and validation by epoch
+plot(history)
+
+
+# check how model performs against original data
+CheckLSTM = model %>% predict(TrainArray)
+CheckLSTM = CheckLSTM * CloseMax
+
+plot(x = DateList[TrainStart:TrainEnd], y = c(NA,diff(YVar[TrainStart:TrainEnd])))
+lines(x = DateList[TrainStart:TrainEnd], y = CheckLSTM, col = "red")
+
+# Predict model
+PredictLSTM = model %>% predict(TestArray)
+PredictLSTM = PredictLSTM * CloseMax
+
+plot(x = DateList[TestStart:DataSize], y = c(NA,diff(YVar[TestStart:DataSize])))
+lines(x = DateList[TestStart:DataSize], y = PredictLSTM, col = "blue")
+
+```
+
+Finally a check of RMSE by model.
+
+```{r RMSE Test}
+
+# RF Model
+sum(na.omit(sqrt((c(NA,diff(YVar[TestStart:DataSize])) - PredictRF)^2)))
+
+# XGB Model
+sum(na.omit(sqrt((c(NA,diff(YVar[TestStart:DataSize])) - PredictXGB)^2)))
+
+# LSTM Model
+sum(na.omit(sqrt((c(NA,diff(YVar[TestStart:DataSize])) - PredictLSTM)^2)))
+
+```
