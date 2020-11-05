@@ -1,0 +1,682 @@
+---
+title: "Monte Carlo Lease Update"
+author: "Will Crouch"
+output: html_document
+---
+
+```{r packages, include=FALSE}
+library(lubridate)
+library(tidyverse)
+library(plotly)
+library(data.table)
+```
+
+
+```{r Data Import and Clean, include=FALSE}
+setwd("D:/R/LP Practice")
+
+Data = read.csv("Lease Data.csv")
+
+colnames(Data) = c("UnitNumber", "LeaseEnd", "Term")
+
+Data$LeaseEndDate = as.Date(Data$LeaseEnd, "%m/%d/%Y")
+
+```
+
+# A Monte Carlo Lease Smoothing
+
+This approach was taken after looking at designs for a linear programming solution proved to be too costly for initial set up.
+
+So, this approach for a Monte Carlo simulation was picked for ease of set up at the expense of processing time.
+
+We are going to set up the data to have a monthly increase field and then calculate the new returns.  The second returns will currently be just an increase of 84 months.
+
+Now, lets pull in the data and clean it up:
+
+```{r Data Setup}
+# Review imported Data
+head(Data)
+
+# Standardize End of Lease
+Data = Data %>%
+  mutate(
+    FirstOfMonth = floor_date(LeaseEndDate, "month")
+    ,LeaseEndFix = if_else(FirstOfMonth == LeaseEndDate
+                           ,LeaseEndDate
+                           ,LeaseEndDate + 1
+    )
+  )
+
+# Holding place to adjust
+Data$DateIncrease = 0
+
+# End result method check
+Data$NewEnd = Data$LeaseEndFix %m+% months(Data$DateIncrease)
+
+# New lease to replace -- Holding place is all 7-year leases
+Data$NewLease = 84
+Data$SecondEnd = Data$NewEnd %m+% months(Data$NewLease)
+
+# Base level variance
+BaseLevel = var(table(Data$SecondEnd))
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$LeaseEndFix, name = "First Returns") %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  layout(barmode = "overlay")
+
+
+```
+
+This section will setup controls for the sims for all models for easier control in testing and publish runs
+
+```{r Sim Structuring}
+
+# Number of Sims
+nSims = 100000
+
+```
+
+Now, lets look at the most optional model to maximize smoothness.  We will follow here with the bulleted specs of the model and the code.
+
+All following models will hide the code since it will be the same structure with changes to the sampling functions.
+
+## Model 1
+The trigger we will pull are:
+* For turn-ins
+|  * If lease is less than seven years, we will extend the lease up to 84 months
+|    * This is weighted towards 0, with a goal of 50% being no extension
+|  * If the lease is a seven year lease, we will extend up to 6 addition months 
+|    * This is weighted towards 0, with a goal of 50% being no extension
+* For new leases 
+|  * New leases will be replaced with with 80% 84-month leases and 20% shorter leases
+|    * 5% 60-month
+|    * 5% 66-month
+|    * 5% 72-month
+|    * 5% 78-month
+|    * 80% 84-month
+
+```{r Monte Carlo Model 1}
+
+# Initialize Best Run variable
+BestRunModel1 = 500000
+
+# Define random addition for number of months to hold lease for simulation
+ExtensionReturns = function(x){
+  ifelse(x == 0
+         ,sample(c(0:6), 1, replace = TRUE, prob = c(.50,rep(1/6*.50, 6))) #Input will be 84-84 to be a zero
+         ,sample(c(0,1:x), 1, replace = TRUE, prob = c(.50,rep(1/x*.50, x))) #Input will be 84-x, where x is <84 so it will be >1 response
+  )
+}
+
+# Define new lease replacement
+ExtensionNewLease = function(x){
+  # Lease Options: 60, 66, 72, 78, 84
+  # We'll try to keep the options low, so .05 for each besides 84
+  sample(c(60, 66, 72, 78, 84), 1, replace = TRUE, prob = c(.05,.05,.05,.05,.8))
+}
+
+# define process for adding months and determining variance
+SimRun = function(){
+  x = Data
+  
+  x = x %>%
+    rowwise() %>%
+    mutate(DateIncrease = ExtensionReturns((84-Term)) # Turn-in extension
+           ,NewLease = ExtensionNewLease() # Replacement leases
+           )
+  
+  # Determine new date to turn in leases
+  x$NewEnd = x$LeaseEndFix %m+% months(x$DateIncrease)
+  
+  # Determine end date for new leases
+  x$SecondEnd = x$NewEnd %m+% months(x$NewLease)
+  
+  # 
+  a = var(table(x$SecondEnd))
+  if(a < BestRunModel1){
+    return(x)
+  }
+   
+}
+
+for(i in 1:nSims){
+  y = SimRun()
+  if(length(y) > 0){
+    DataModel1 = y
+    BestRunModel1 = var(table(DataModel1$SecondEnd))
+  }
+}
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  add_histogram(x = DataModel1$SecondEnd, name = "Model 1") %>%
+  layout(barmode = "overlay"
+         ,xaxis = list(type = "date"
+                       ,tickformat = "%B %Y")
+         ,legend = list(x = .6, y = 1))
+
+```
+
+## Model 2
+The trigger we will pull are:
+* For turn-ins
+|  * If lease is less than seven years, we will extend the lease up to 84 months
+|    * This is weighted towards 0, with a goal of 25% being no extension
+|  * If the lease is a seven year lease, we will extend up to 6 addition months 
+|    * This is weighted towards 0, with a goal of 25% being no extension
+* For new leases 
+|  * New leases will be replaced with with 60% 84-month leases and 40% shorter leases
+|    * 10% 60-month
+|    * 10% 66-month
+|    * 10% 72-month
+|    * 10% 78-month
+|    * 60% 84-month
+
+```{r Monte Carlo Model 2, echo = FALSE}
+
+# Initialize Best Run variable
+BestRunModel2 = 500000
+
+# Define random addition for number of months to hold lease for simulation
+ExtensionReturns = function(x){
+  ifelse(x == 0
+         ,sample(c(0:6), 1, replace = TRUE, prob = c(.25,rep(1/6*.75, 6))) #Input will be 84-84 to be a zero
+         ,sample(c(0,1:x), 1, replace = TRUE, prob = c(.25,rep(1/x*.75, x))) #Input will be 84-x, where x is <84 so it will be >1 response
+  )
+}
+
+# Define new lease replacement
+ExtensionNewLease = function(x){
+  # Lease Options: 60, 66, 72, 78, 84
+  # We'll try to keep the options low, so .05 for each besides 84
+  sample(c(60, 66, 72, 78, 84), 1, replace = TRUE, prob = c(.1,.1,.1,.1,.6))
+}
+
+# define process for adding months and determining variance
+SimRun = function(){
+  x = Data
+  
+  x = x %>%
+    rowwise() %>%
+    mutate(DateIncrease = ExtensionReturns((84-Term)) # Turn-in extension
+           ,NewLease = ExtensionNewLease() # Replacement leases
+           )
+  
+  # Determine new date to turn in leases
+  x$NewEnd = x$LeaseEndFix %m+% months(x$DateIncrease)
+  
+  # Determine end date for new leases
+  x$SecondEnd = x$NewEnd %m+% months(x$NewLease)
+  
+  # 
+  a = var(table(x$SecondEnd))
+  if(a < BestRunModel2){
+    return(x)
+  }
+   
+}
+
+for(i in 1:nSims){
+  y = SimRun()
+  if(length(y) > 0){
+    DataModel2 = y
+    BestRunModel2 = var(table(DataModel2$SecondEnd))
+  }
+}
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  add_histogram(x = DataModel2$SecondEnd, name = "Model 2") %>%
+  layout(barmode = "overlay"
+         ,xaxis = list(type = "date"
+                       ,tickformat = "%B %Y")
+         ,legend = list(x = .6, y = 1))
+
+```
+
+## Model 3
+The trigger we will pull are:
+* For turn-ins
+|  * If lease is less than seven years, we will extend the lease up to 84 months
+|    * This is not weighted towards 0
+|  * If the lease is a seven year lease, we will extend up to 6 addition months 
+|    * This is not weighted towards 0
+* For new leases 
+|  * New leases will be replaced with with 60% 84-month leases and 40% shorter leases
+|    * 10% 60-month
+|    * 10% 66-month
+|    * 10% 72-month
+|    * 10% 78-month
+|    * 60% 84-month
+
+```{r Monte Carlo Model 3, echo = FALSE}
+
+# Initialize Best Run variable
+BestRunModel3 = 500000 ### Model Number Update Point
+
+# Define random addition for number of months to hold lease for simulation
+ExtensionReturns = function(x){
+  ifelse(x == 0
+         ,sample(c(0:6), 1, replace = TRUE, prob = c(rep(1/7, 7))) #Input will be 84-84 to be a zero
+         ,sample(c(0:x), 1, replace = TRUE, prob = c(rep(1/x, x+1))) #Input will be 84-x, where x is <84 so it will be >1 response
+  )
+}
+
+# Define new lease replacement
+ExtensionNewLease = function(x){
+  # Lease Options: 60, 66, 72, 78, 84
+  # We'll try to keep the options low, so .05 for each besides 84
+  sample(c(60, 66, 72, 78, 84), 1, replace = TRUE, prob = c(.1,.1,.1,.1,.6))
+}
+
+# define process for adding months and determining variance
+SimRun = function(){
+  x = Data
+  
+  x = x %>%
+    rowwise() %>%
+    mutate(DateIncrease = ExtensionReturns((84-Term)) # Turn-in extension
+           ,NewLease = ExtensionNewLease() # Replacement leases
+           )
+  
+  # Determine new date to turn in leases
+  x$NewEnd = x$LeaseEndFix %m+% months(x$DateIncrease)
+  
+  # Determine end date for new leases
+  x$SecondEnd = x$NewEnd %m+% months(x$NewLease)
+  
+  # 
+  a = var(table(x$SecondEnd))
+  if(a < BestRunModel3){ ### Model Number Update Point
+    return(x)
+  }
+   
+}
+
+for(i in 1:nSims){
+  y = SimRun()
+  if(length(y) > 0){
+    DataModel3 = y ### Model Number Update Point
+    BestRunModel3 = var(table(DataModel3$SecondEnd)) ### Model Number Update Point
+  }
+}
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  add_histogram(x = DataModel3$SecondEnd, name = "Model 3") %>% ### Model Number Update Point
+  layout(barmode = "overlay"
+         ,xaxis = list(type = "date"
+                       ,tickformat = "%B %Y")
+         ,legend = list(x = .6, y = 1))
+
+```
+
+## Model 4
+The trigger we will pull are:
+* For turn-ins
+|  * If lease is less than seven years, we will extend the lease up to 84 months
+|    * This is not weighted towards 0
+|  * If the lease is a seven year lease, we will extend up to 6 addition months 
+|    * This is not weighted towards 0
+* For new leases 
+|  * New leases will be replaced with with 60% 84-month leases and 40% shorter leases
+|    * 40% 60-83 month
+|    * 60% 84-month
+
+```{r Monte Carlo Model 4, echo = FALSE}
+
+# Initialize Best Run variable
+BestRunModel4 = 500000 ### Model Number Update Point
+
+# Define random addition for number of months to hold lease for simulation
+ExtensionReturns = function(x){
+  ifelse(x == 0
+         ,sample(c(0:6), 1, replace = TRUE, prob = c(rep(1/7, 7))) #Input will be 84-84 to be a zero
+         ,sample(c(0:x), 1, replace = TRUE, prob = c(rep(1/x, x+1))) #Input will be 84-x, where x is <84 so it will be >1 response
+  )
+}
+
+# Define new lease replacement
+ExtensionNewLease = function(x){
+  # Lease Options: 60, 66, 72, 78, 84
+  # We'll try to keep the options low, so .05 for each besides 84
+  sample(c(60:83,84), 1, replace = TRUE, prob = c(rep(1/24*.4,24),.6))
+}
+
+# define process for adding months and determining variance
+SimRun = function(){
+  x = Data
+  
+  x = x %>%
+    rowwise() %>%
+    mutate(DateIncrease = ExtensionReturns((84-Term)) # Turn-in extension
+           ,NewLease = ExtensionNewLease() # Replacement leases
+           )
+  
+  # Determine new date to turn in leases
+  x$NewEnd = x$LeaseEndFix %m+% months(x$DateIncrease)
+  
+  # Determine end date for new leases
+  x$SecondEnd = x$NewEnd %m+% months(x$NewLease)
+  
+  # 
+  a = var(table(x$SecondEnd))
+  if(a < BestRunModel4){ ### Model Number Update Point
+    return(x)
+  }
+   
+}
+
+for(i in 1:nSims){
+  y = SimRun()
+  if(length(y) > 0){
+    DataModel4 = y  ### Model Number Update Point
+    BestRunModel4 = var(table(DataModel4$SecondEnd))  ### Model Number Update Point
+  } 
+}
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  add_histogram(x = DataModel4$SecondEnd, name = "Model 4") %>%  ### Model Number Update Point
+  layout(barmode = "overlay"
+         ,xaxis = list(type = "date"
+                       ,tickformat = "%B %Y")
+         ,legend = list(x = .6, y = 1))
+
+```
+
+## Model 5
+The trigger we will pull are:
+* For turn-ins
+|  * If lease is less than seven years, we will extend the lease up to 84 months
+|    * This is not weighted towards 0
+|  * If the lease is a seven year lease, we will extend up to 6 addition months 
+|    * This is not weighted towards 0
+* For new leases 
+|  * New leases will be replaced with with an even split between 60, 66, 72, 78, and 84 months
+|    * 100% 60-84 month
+
+```{r Monte Carlo Model 5, echo = FALSE}
+
+# Initialize Best Run variable
+BestRunModel5 = 500000 ### Model Number Update Point
+
+# Define random addition for number of months to hold lease for simulation
+ExtensionReturns = function(x){
+  ifelse(x == 0
+         ,sample(c(0:6), 1, replace = TRUE, prob = c(rep(1/7, 7))) #Input will be 84-84 to be a zero
+         ,sample(c(0:x), 1, replace = TRUE, prob = c(rep(1/x, x+1))) #Input will be 84-x, where x is <84 so it will be >1 response
+  )
+}
+
+# Define new lease replacement
+ExtensionNewLease = function(x){
+  # Lease Options: 60, 66, 72, 78, 84
+  # We'll try to keep the options low, so .05 for each besides 84
+  sample(c(60,66,72,78,84), 1, replace = TRUE, prob = rep(1/5,5))
+}
+
+# define process for adding months and determining variance
+SimRun = function(){
+  x = Data
+  
+  x = x %>%
+    rowwise() %>%
+    mutate(DateIncrease = ExtensionReturns((84-Term)) # Turn-in extension
+           ,NewLease = ExtensionNewLease() # Replacement leases
+           )
+  
+  # Determine new date to turn in leases
+  x$NewEnd = x$LeaseEndFix %m+% months(x$DateIncrease)
+  
+  # Determine end date for new leases
+  x$SecondEnd = x$NewEnd %m+% months(x$NewLease)
+  
+  # 
+  a = var(table(x$SecondEnd))
+  if(a < BestRunModel5){ ### Model Number Update Point
+    return(x)
+  }
+   
+}
+
+for(i in 1:nSims){
+  y = SimRun()
+  if(length(y) > 0){
+    DataModel5 = y  ### Model Number Update Point
+    BestRunModel5 = var(table(DataModel5$SecondEnd))  ### Model Number Update Point
+  } 
+}
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  add_histogram(x = DataModel5$SecondEnd, name = "Model 5") %>%  ### Model Number Update Point
+  layout(barmode = "overlay"
+         ,xaxis = list(type = "date"
+                       ,tickformat = "%B %Y")
+         ,legend = list(x = .6, y = 1))
+
+```
+
+## Model 6
+The trigger we will pull are:
+* For turn-ins
+|  * If lease is less than seven years, we will extend the lease up to 84 months
+|    * This is weighted towards 0, with a goal of 50% no change
+|  * If the lease is a seven year lease, we will extend up to 6 addition months 
+|    * This is not weighted towards 0
+* For new leases 
+|  * New leases will be replaced with with an even split between 60, 66, 72, 78, and 84 months
+|    * 100% 60-84 month
+
+```{r Monte Carlo Model 6, echo = FALSE}
+
+# Initialize Best Run variable
+BestRunModel6 = 500000 ### Model Number Update Point
+
+# Define random addition for number of months to hold lease for simulation
+ExtensionReturns = function(x){
+  ifelse(x == 0
+         ,sample(c(0:6), 1, replace = TRUE, prob = c(.5, rep(1/6, 6))) #Input will be 84-84 to be a zero
+         ,sample(c(0:x), 1, replace = TRUE, prob = c(rep(1/x, x+1))) #Input will be 84-x, where x is <84 so it will be >1 response
+  )
+}
+
+# Define new lease replacement
+ExtensionNewLease = function(x){
+  # Lease Options: 60, 66, 72, 78, 84
+  # We'll try to keep the options low, so .05 for each besides 84
+  sample(c(60,66,72,78,84), 1, replace = TRUE, prob = rep(1/5,5))
+}
+
+# define process for adding months and determining variance
+SimRun = function(){
+  x = Data
+  
+  x = x %>%
+    rowwise() %>%
+    mutate(DateIncrease = ExtensionReturns((84-Term)) # Turn-in extension
+           ,NewLease = ExtensionNewLease() # Replacement leases
+           )
+  
+  # Determine new date to turn in leases
+  x$NewEnd = x$LeaseEndFix %m+% months(x$DateIncrease)
+  
+  # Determine end date for new leases
+  x$SecondEnd = x$NewEnd %m+% months(x$NewLease)
+  
+  # 
+  a = var(table(x$SecondEnd))
+  if(a < BestRunModel6){ ### Model Number Update Point
+    return(x)
+  }
+   
+}
+
+for(i in 1:nSims){
+  y = SimRun()
+  if(length(y) > 0){
+    DataModel6 = y  ### Model Number Update Point
+    BestRunModel6 = var(table(DataModel6$SecondEnd))  ### Model Number Update Point
+  } 
+}
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  add_histogram(x = DataModel6$SecondEnd, name = "Model 6") %>%  ### Model Number Update Point
+  layout(barmode = "overlay"
+         ,xaxis = list(type = "date"
+                       ,tickformat = "%B %Y")
+         ,legend = list(x = .6, y = 1))
+
+```
+
+## Model 7
+This is a full optimization model, just to see what it would look like to get as smooth of a 2nd wave of lease swaps as possible
+* For turn-ins
+|  * If lease is less than seven years, we will allow for up to 36 months extension
+|  * If the lease is a seven year lease, we will extend up to 12 addition months 
+* For new leases 
+|  * New leases will be replaced with with a lease that can range from 36 to 90 months
+
+```{r Monte Carlo Model 7, echo = FALSE}
+
+# Initialize Best Run variable
+BestRunModel7 = 500000 ### Model Number Update Point
+
+# Define random addition for number of months to hold lease for simulation
+ExtensionReturns = function(x){
+  ifelse(x == 0
+         ,sample(c(0:12), 1, replace = TRUE, prob = c(rep(1/12, 13))) #Input will be 84-84 to be a zero
+         ,sample(c(0:36), 1, replace = TRUE, prob = c(rep(1/36, 37))) #Input will be 84-x, where x is <84 so it will be >1 response
+  )
+}
+
+# Define new lease replacement
+ExtensionNewLease = function(x){
+  # Lease Options: 60, 66, 72, 78, 84
+  # We'll try to keep the options low, so .05 for each besides 84
+  sample(c(36:90), 1, replace = TRUE, prob = c(rep(1/55, 55)))
+}
+
+# define process for adding months and determining variance
+SimRun = function(){
+  x = Data
+  
+  x = x %>%
+    rowwise() %>%
+    mutate(DateIncrease = ExtensionReturns((84-Term)) # Turn-in extension
+           ,NewLease = ExtensionNewLease() # Replacement leases
+           )
+  
+  # Determine new date to turn in leases
+  x$NewEnd = x$LeaseEndFix %m+% months(x$DateIncrease)
+  
+  # Determine end date for new leases
+  x$SecondEnd = x$NewEnd %m+% months(x$NewLease)
+  
+  # 
+  a = var(table(x$SecondEnd))
+  if(a < BestRunModel7){ ### Model Number Update Point
+    return(x)
+  }
+   
+}
+
+for(i in 1:nSims){
+  y = SimRun()
+  if(length(y) > 0){
+    DataModel7 = y  ### Model Number Update Point
+    BestRunModel7 = var(table(DataModel7$SecondEnd))  ### Model Number Update Point
+  } 
+}
+
+# Cycle review
+plot_ly(alpha = .6) %>%
+  add_histogram(x = Data$SecondEnd, name = "Second Returns") %>%
+  add_histogram(x = DataModel7$SecondEnd, name = "Model 7") %>%  ### Model Number Update Point
+  layout(barmode = "overlay"
+         ,xaxis = list(type = "date"
+                       ,tickformat = "%B %Y")
+         ,legend = list(x = .6, y = 1))
+
+```
+
+Finally, a check on the different model's variances and compare all models together by month.
+
+```{r Check}
+
+# Clean up all data in monthly count
+BaseTable = as.data.frame(table(Data$SecondEnd))
+Model1Table = as.data.frame(table(DataModel1$SecondEnd))
+Model2Table = as.data.frame(table(DataModel2$SecondEnd))
+Model3Table = as.data.frame(table(DataModel3$SecondEnd))
+Model4Table = as.data.frame(table(DataModel4$SecondEnd))
+Model5Table = as.data.frame(table(DataModel5$SecondEnd))
+Model6Table = as.data.frame(table(DataModel6$SecondEnd))
+Model7Table = as.data.frame(table(DataModel7$SecondEnd))
+
+# Combine into 1 data frame
+Comparison = data.frame("Date" = seq(as.Date("2028-01-01"), as.Date("2034-01-01"), "months"))
+Comparison$Current = BaseTable$Freq[match(Comparison$Date,as.Date(BaseTable$Var1))]
+Comparison$Model1 = Model1Table$Freq[match(Comparison$Date,as.Date(Model1Table$Var1))]
+Comparison$Model2 = Model2Table$Freq[match(Comparison$Date,as.Date(Model2Table$Var1))]
+Comparison$Model3 = Model3Table$Freq[match(Comparison$Date,as.Date(Model3Table$Var1))]
+Comparison$Model4 = Model4Table$Freq[match(Comparison$Date,as.Date(Model4Table$Var1))]
+Comparison$Model5 = Model5Table$Freq[match(Comparison$Date,as.Date(Model5Table$Var1))]
+Comparison$Model6 = Model6Table$Freq[match(Comparison$Date,as.Date(Model6Table$Var1))]
+Comparison$Model7 = Model7Table$Freq[match(Comparison$Date,as.Date(Model7Table$Var1))]
+
+Comparison = Comparison %>% replace(is.na(Comparison), 0)
+
+# Multiple Model review, bar chart overlay with month breakout
+plot_ly(data = Comparison
+        ,x = ~Date
+        ,y = ~Current
+        ,type = "bar"
+        ,name = "Current State"
+        ,alpha = .6) %>%
+  add_trace(y = ~Model1, name = 'Model 1') %>%
+  add_trace(y = ~Model2, name = 'Model 2') %>%
+  add_trace(y = ~Model3, name = 'Model 3') %>%
+  add_trace(y = ~Model4, name = 'Model 4') %>%
+  add_trace(y = ~Model5, name = 'Model 5') %>%
+  add_trace(y = ~Model6, name = 'Model 6') %>%
+  add_trace(y = ~Model7, name = 'Model 7') %>%
+  layout(title = "Lease Smoothing Review"
+         ,legend = list(x = .6, y = 1)
+         ,barmode = "overlay")
+
+
+ModelResults = data.table::data.table(ModelName = c("Baseline"
+                                                    ,"Model 1"
+                                                    ,"Model 2"
+                                                    ,"Model 3"
+                                                    ,"Model 4"
+                                                    ,"Model 5"
+                                                    ,"Model 6"
+                                                    ,"Model 7"
+                                                    )
+                                      ,Results = c(BaseLevel
+                                                   ,BestRunModel1
+                                                   ,BestRunModel2
+                                                   ,BestRunModel3
+                                                   ,BestRunModel4
+                                                   ,BestRunModel5
+                                                   ,BestRunModel6
+                                                   ,BestRunModel7
+                                                   )
+                                      )
+
+ModelResults
+
+
+```
