@@ -1,0 +1,72 @@
+---
+title: "Logit Model"
+author: "Will Crouch"
+date: "7/14/2021"
+output: html_document
+---
+
+```{r setup}
+library(tidyverse)
+library(googlesheets4)
+```
+
+
+```{r load & clean data}
+BaseData = read_sheet("1A2Wn4l5_veQeG2tM7a09D5BljXu5VBome5qcg3HFR9I")
+
+# Set as factor for model
+BaseData$Success = as.factor(BaseData$Success)
+
+# Clean up for plotting [ 0 - 1 scale ]
+BaseData$SuccessNum = as.numeric(BaseData$Success)-1
+
+# look at data
+head(BaseData, 10)
+
+
+```
+```{r plot base data}
+plot(x = BaseData$Income, y = BaseData$SuccessNum)
+
+```
+
+```{r model}
+# generate logit model
+LogitModel = glm(Success ~ Income, data = BaseData, family = "binomial")
+
+# review - its not very good
+summary(LogitModel)
+
+# estimate prob of yes
+BaseData$EstimateProb = predict(LogitModel, type = "response")
+
+# convert prob to yes no at 50% confidence
+BaseData$EstimateClass = if_else(BaseData$EstimateProb > .5, "Yes", "No")
+
+# review data
+head(BaseData)
+
+
+```
+
+
+```{r review accuracy}
+# confusion matrix
+table(BaseData$Success, BaseData$EstimateClass)
+
+#Accuracy
+(35+7)/70
+```
+
+
+```{r plot logit}
+# plot logit results
+plot(x = BaseData$Income, y = BaseData$SuccessNum)
+lines(x = BaseData$Income, y = BaseData$EstimateProb, col = "blue")
+```
+
+
+
+
+
+
